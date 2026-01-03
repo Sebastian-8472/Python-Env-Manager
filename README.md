@@ -18,7 +18,10 @@ This project demonstrates core software engineering competencies:
 - **Robust Error Handling**: Advanced `try-except` blocks to manage network timeouts, permission issues, and command failures.
 - **Documentation**: Methods documented according to the **Google Style Python Docstrings** standard.
 
-
+## 🧪 Running Tests
+To run the automated suite and verify the logic:
+```bash
+python test_py_updater.py
 
 ## 🚀 Quick Start
 
