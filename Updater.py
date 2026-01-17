@@ -3,92 +3,133 @@ import sys
 import json
 import datetime
 import os
+import logging
 
-# Logger Configuration
+# Logger configuration
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(levelname)s] - %(message)s',
     handlers=[
-        logging.FileHandler("updater_debug.log"),  # Save to file
-        logging.StreamHandler(sys.stdout)          # Output to console
+        logging.FileHandler("updater_debug.log"),  # Save on a file
+        logging.StreamHandler(sys.stdout)  # Show in the screen
     ]
 )
 logger = logging.getLogger(__name__)
 
+
 class PyUpdater:
     """
-    Advanced manager for Python package maintenance with built-in logging.
-    
-    This class handles checking for outdated packages, creating environment backups,
-    and performing batch updates with rollback capabilities.
+        A utility class to manage and automate Python package updates.
+
+        Attributes:
+            python_exe (str): The path to the current Python executable.
     """
 
     def __init__(self):
-        """Initializes the updater using the current Python executable."""
         self.python_exe = sys.executable
         self.last_backup = None
-        logger.info(f"PyUpdater initialized using: {self.python_exe}")
+        logger.info(f"Initialized PyUpdater using: {self.python_exe}")
 
     def get_outdated_packages(self):
         """
-        Retrieves a list of outdated packages.
-        
+        Retrieves a list of outdated packages using pip.
+
         Returns:
-            list: A list of dictionaries containing package update info.
+            list: A list of dictionaries containing package details
+                  (name, current version, latest version).
         """
-        logger.info("Checking for outdated packages...")
+        logger.info("Checking for obsolete packages...")
         try:
             result = subprocess.run(
                 [self.python_exe, "-m", "pip", "list", "--outdated", "--format=json"],
                 capture_output=True, text=True, check=True
             )
             packages = json.loads(result.stdout)
-            logger.info(f"Found {len(packages)} outdated packages.")
+            logger.info(f"Found {len(packages)} obsolete packages.")
             return packages
         except subprocess.CalledProcessError as e:
-            logger.error(f"Critical error during package check: {e.stderr}")
-            raise
+            logger.error(f"Critical error while checking packets: {e.stderr}")
+            raise e
 
-    def update_package(self, package_name, current_ver, latest_ver):
+    def update_package(self, package_name, current_version, latest_version):
         """
-        Updates a single package and logs the start and completion status.
-        
+        Updates a specific package to a target version or the latest available.
+
         Args:
-            package_name (str): Name of the package to upgrade.
-            current_ver (str): Current installed version.
-            latest_ver (str): Target version available.
-            
-        Returns:
-            bool: True if success, False otherwise.
-        """
-        logger.info(f"STARTING UPDATE: {package_name} ({current_ver} -> {latest_ver})")
+            package_name (str): The name of the package to update.
+            current_version (str): The current version installed (use "any" for targeted updates).
+            latest_version (str): The version to install. If "latest", it uses --upgrade.
 
+        Returns:
+            bool: True if the update was successful, False otherwise.
+        """
         try:
-            subprocess.run(
-                [self.python_exe, "-m", "pip", "install", "--upgrade", package_name],
-                capture_output=True, text=True, check=True
-            )
-            logger.info(f"COMPLETED: {package_name} is now at version {latest_ver}.")
+            if latest_version == "latest":
+                command = [self.python_exe, "-m", "pip", "install", "--upgrade", package_name]
+            else:
+                command = [self.python_exe, "-m", "pip", "install", f"{package_name}=={latest_version}"]
+
+            subprocess.run(command, check=True, capture_output=True)
+            logger.info(f"Successfully updated {package_name} to {latest_version}")
             return True
         except subprocess.CalledProcessError as e:
-            logger.error(f"FAILED: Could not update {package_name}. Error: {e.stderr.strip()}")
+            logger.error(f"Failed to update {package_name}: {e}")
             return False
+
+    def update_from_file(self, file_path):
+        """
+        Updates packages based on a list provided in a text file.
+
+        The file should contain one package name per line. Empty lines or
+        lines starting with '#' (comments) are automatically ignored.
+
+        Args:
+            file_path (str): The path to the text file containing package names.
+
+        Returns:
+            dict: A summary of the operation containing 'success' and 'failed' counts.
+        """
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return {"success": 0, "failed": 0}
+
+        logger.info(f"Reading target packages from: {file_path}")
+
+        packages = []
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    # Skips empty line
+                    if line and not line.startswith("#"):
+                        # If the line has pkg==version, it takes only the name
+                        pkg_name = line.split("==")[0].split(">=")[0].strip()
+                        packages.append(pkg_name)
+        except IOError as e:
+            logger.error(f"Error reading file {file_path}: {e}")
+            return {"success": 0, "failed": 0}
+
+        if not packages:
+            logger.warning("No valid package names found in the file.")
+            return {"success": 0, "failed": 0}
+
+        return self.update_target(packages)
 
     def create_backup(self, filename=None):
         """
-        Creates a snapshot of the current environment.
-        
+        Creates a backup of the current environment's packages.
+
         Args:
-            filename (str, optional): Name of the backup file. Defaults to timestamped name.
-            
+            filename (str): The name of the file where the backup will be saved.
+
         Returns:
-            str: The filename of the created backup.
+            str: The path to the created backup file, or None if the operation fails.
         """
         if filename is None:
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"backup_env_{timestamp}.txt"
 
-        logger.info(f"Creating safety backup: {filename}")
+        logger.info(f"Creating a security backup: {filename}")
         try:
             result = subprocess.run(
                 [self.python_exe, "-m", "pip", "freeze"],
@@ -97,103 +138,156 @@ class PyUpdater:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(result.stdout)
             self.last_backup = filename
-            logger.info("Backup successfully created.")
+            logger.info("Backup created successfully.")
             return filename
         except Exception as e:
-            logger.error(f"Error during backup creation: {e}")
+            logger.error(f"Error creating backup: {e}")
             return None
 
     def install_from_requirements(self, filename="requirements_updated.txt"):
         """
-        Installs packages listed in a requirements file to recreate an environment.
+        Installs the packages listed in a requirements file to recreate an environment.
+
+        This method is the opposite of generate_requirements. It reads the specified file
+        and performs a bulk installation of all listed dependencies and versions.
 
         Args:
-            filename (str): Path to the .txt requirements file.
+        filename (str): The path to the .txt file to read the packages from.
+        Default: 'requirements_updated.txt'.
 
         Returns:
-            bool: True if installation was successful, False otherwise.
+        bool: True if the installation was successful, False otherwise.
+
+        Raises:
+        FileNotFoundError: If the specified file does not exist.
         """
         if not os.path.exists(filename):
-            logger.error(f"Error: The file '{filename}' does not exist.")
+            logger(f"Error: The file {filename} does not exist.")
             return False
 
-        logger.info(f"Starting package installation from '{filename}'...")
+        logger.info(f"Start installing packages from {filename}...")
         try:
             # -r tells pip to read from a requirements file
             subprocess.run(
                 [self.python_exe, "-m", "pip", "install", "-r", filename],
                 check=True
             )
-            logger.info(f"Environment successfully restored from '{filename}'.")
+            logger.info(f"Environment successfully restored from file {filename}.")
             return True
         except subprocess.CalledProcessError as e:
-            logger.error(f"Error during bulk installation: {e}")
+            logger.info(f"Error during mass installation: {e}")
             return False
 
-    def rollback(self, filename=None):
+    def update_all(self, export_requirements=True):
         """
-        Restores the environment using a backup file.
-        """
-        target = filename or self.last_backup
-        if not target:
-            logger.error("No backup file available for rollback.")
-            return False
-        
-        logger.warning(f"Initiating rollback from file: {target}")
-        return self.install_from_requirements(target)
+        Automatically updates all outdated packages in the current environment.
 
-    def update_all(self, auto_rollback=False):
-        """
-        Performs the complete update cycle with detailed logging and optional rollback.
+        This method identifies all packages with available updates and iterates
+        through them to perform the installation. Optionally, it can trigger
+        a generation of an updated requirements file after the process.
 
         Args:
-            auto_rollback (bool): If True, restores backup if any update fails.
+            export_requirements (bool): If True, calls generate_requirements()
+                                        after all updates are completed.
+                                        Defaults to True.
+
+        Returns:
+            None
         """
-        logger.info("=== Starting Global Maintenance Procedure ===")
-
-        # 1. Backup
-        backup_file = self.create_backup()
-        if not backup_file:
-            logger.critical("Procedure aborted: Backup failed.")
-            return
-
-        # 2. Identification
         outdated = self.get_outdated_packages()
         if not outdated:
-            logger.info("All modules are up to date. Nothing to do.")
+            logger.info("All packages are already up to date.")
             return
 
-        # 3. Update Loop
-        success_count = 0
-        failure_count = 0
-
         for pkg in outdated:
-            if self.update_package(pkg['name'], pkg['version'], pkg['latest_version']):
-                success_count += 1
-            else:
-                failure_count += 1
+            # We assume update_package handles the logic for each individual module
+            self.update_package(pkg['name'])
 
-        # 4. Final Report
-        logger.info("=== OPERATION SUMMARY ===")
-        logger.info(f"Total packages processed: {len(outdated)}")
-        logger.info(f"Successful updates: {success_count}")
-        logger.info(f"Failed updates: {failure_count}")
+        if export_requirements:
+            self.generate_requirements()
 
-        if failure_count > 0:
-            if auto_rollback:
-                logger.warning("Failures detected. Starting automatic rollback...")
-                self.rollback(backup_file)
-            else:
-                logger.warning(f"Attention: {failure_count} packages were not updated. Check the log.")
+    def rollback(self, backup_file):
+        """
+        Reverts the Python environment to a previous state using a backup file.
 
-        logger.info("=== Procedure Finished ===")
+        This method attempts to restore the environment by installing the exact
+        versions specified in the backup requirements file. It is typically
+        called when an update process fails.
 
-# --- Usage Example ---
+        Args:
+            backup_file (str): The path to the requirements backup file (e.g., 'requirements_backup.txt').
+
+        Returns:
+            bool: True if the rollback was successful, False otherwise.
+        """
+        if not os.path.exists(backup_file):
+            logger.error(f"Rollback failed: Backup file {backup_file} not found.")
+            return False
+
+        logger.info(f"Initiating rollback using backup: {backup_file}...")
+
+        try:
+            # Optional: You may want to uninstall everything first,
+            # but pip install -r usually overrides correctly.
+            command = [self.python_exe, "-m", "pip", "install", "-r", backup_file]
+
+            # performing the recovery
+            subprocess.run(command, check=True, capture_output=True)
+
+            logger.info("Rollback completed successfully. Environment restored.")
+            return True
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Critical error during rollback: {e}")
+            # Here you could add some additional emergency logic
+            return False
+
+    def generate_requirements(self, filename="requirements.txt"):
+        """
+        Generates a requirements.txt file based on the currently installed packages.
+
+        This method uses the 'pip freeze' command to capture the exact state
+        of the environment and saves it to a file. This is useful for
+        environment reproducibility after updates.
+
+        Args:
+            filename (str): The name or path of the file to be created.
+                            Defaults to "requirements.txt".
+
+        Returns:
+            bool: True if the file was generated successfully, False otherwise.
+        """
+        logger.info(f"Generating updated requirements file: {filename}...")
+
+        try:
+            # Run 'pip freeze' to get the current state
+            result = subprocess.run(
+                [self.python_exe, "-m", "pip", "freeze"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+
+            # Write output to file
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(result.stdout)
+
+            logger.info(f"Successfully exported dependencies to {filename}")
+            return True
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to capture installed packages: {e}")
+            return False
+        except IOError as e:
+            logger.error(f"Failed to write to file {filename}: {e}")
+            return False
+
+# --- Example of use ---
 if __name__ == "__main__":
     updater = PyUpdater()
 
-    # Example A: Update everything and save
-    updater.update_all(auto_rollback=True)
+    # Example A: Update all and save
+    # updater.update_all()
 
-    # Example B: Restore environment from an existing file
+    # Example B: Restore the environment from an existing file
     # updater.install_from_requirements("requirements_updated.txt")
